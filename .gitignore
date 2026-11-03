@@ -1,0 +1,6 @@
+venv/
+.env
+chat_history.db
+vector_index/
+__pycache__/
+.streamlit/
