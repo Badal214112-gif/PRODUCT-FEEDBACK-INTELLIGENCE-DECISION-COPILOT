@@ -35,7 +35,7 @@ To run this project locally on your machine, follow these steps:
 
 1. **Clone the repository:**
    ```bash
-   git clone [https://github.com/Badal214112-gif/PRODUCT-FEEDBACK-INTELLIGENCE-DECISION-COPILOT.git](https://github.com/Badal214112-gif/PRODUCT-FEEDBACK-INTELLIGENCE-DECISION-COPILOT.git)
+   git clone https://github.com/Badal214112-gif/PRODUCT-FEEDBACK-INTELLIGENCE-DECISION-COPILOT.git
    cd PRODUCT-FEEDBACK-INTELLIGENCE-DECISION-COPILOT
    python -m venv venv
    venv\Scripts\activate
