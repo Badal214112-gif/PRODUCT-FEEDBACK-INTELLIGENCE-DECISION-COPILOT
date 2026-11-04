@@ -11,12 +11,12 @@ Managing and extracting actionable insights from thousands of customer reviews i
 
 ## Tech Stack & Architecture
 
-* **Frontend & UI:** Streamlit (Interactive web application framework)
-* **Orchestration & Framework:** LangChain (For chaining prompts, retrievers, and LLM logic)
-* **LLM & Inference:** Groq Cloud APIs (Lightning-fast open-source LLM inference like Llama 3)
-* **Vector Embeddings & Search:** Sentence Transformers & FAISS (`faiss-cpu`) for high-performance similarity search over feedback datasets
-* **Data Processing & Analytics:** Pandas (For structured CSV data manipulation and dataset handling)
-* **State & Configuration:** Python-dotenv & SQLite (For chat history and local environment management)
+- **Frontend & UI:** Streamlit (Interactive web application framework)
+- **Orchestration & Framework:** LangChain (For chaining prompts, retrievers, and LLM logic)
+- **LLM & Inference:** Groq Cloud APIs (Lightning-fast open-source LLM inference like Llama 3)
+- **Vector Embeddings & Search:** Sentence Transformers & FAISS (`faiss-cpu`) for high-performance similarity search over feedback datasets
+- **Data Processing & Analytics:** Pandas (For structured CSV data manipulation and dataset handling)
+- **State & Configuration:** Python-dotenv & SQLite (For chat history and local environment management)
 
 ---
 
@@ -32,7 +32,9 @@ Managing and extracting actionable insights from thousands of customer reviews i
 ## Live Demo
 
 Check out the live version of the application here:  
-[[[LIVE DEMO]](https://data-analysis-and-business-insight-ez7ud9dftkkhwhansuddhv.streamlit.app/)](https://ai-feedback-copilot.streamlit.app/)
+[Live Demo](https://ai-feedback-copilot.streamlit.app/)
+
+---
 
 ## Local Installation & Setup
 
@@ -40,7 +42,7 @@ To run this project locally on your machine, follow these steps:
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/Badal214112-gif/PRODUCT-FEEDBACK-INTELLIGENCE-DECISION-COPILOT.git
+   git clone [https://github.com/Badal214112-gif/PRODUCT-FEEDBACK-INTELLIGENCE-DECISION-COPILOT.git](https://github.com/Badal214112-gif/PRODUCT-FEEDBACK-INTELLIGENCE-DECISION-COPILOT.git)
    cd PRODUCT-FEEDBACK-INTELLIGENCE-DECISION-COPILOT
    python -m venv venv
    venv\Scripts\activate
