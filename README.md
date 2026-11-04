@@ -32,7 +32,7 @@ Managing and extracting actionable insights from thousands of customer reviews i
 ## Live Demo
 
 Check out the live version of the application here:  
-[[LIVE DEMO]]((https://ai-feedback-copilot.streamlit.app/))
+[[LIVE DEMO]](([https://ai-feedback-copilot.streamlit.app/)](https://ai-feedback-copilot.streamlit.app/))
 
 ## Local Installation & Setup
 
