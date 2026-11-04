@@ -29,9 +29,12 @@ Managing and extracting actionable insights from thousands of customer reviews i
 
 ---
 
-## Local Installation & Setup
+## Live Demo
 
-LIVE DEMO - https://ai-feedback-copilot.streamlit.app/
+Check out the live version of the application here:  
+[[LIVE DEMO]]((https://ai-feedback-copilot.streamlit.app/))
+
+## Local Installation & Setup
 
 To run this project locally on your machine, follow these steps:
 
