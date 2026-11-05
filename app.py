@@ -278,7 +278,7 @@ if active_df is not None:
                     context_data = ""
                     if "ANALYSIS" in route_type and active_df is not None:
                         try:
-                            # --- Robust Official create_pandas_dataframe_agent with Zero-Shot Agent Type ---
+                            # --- Official DataFrame Agent with Zero-Shot React Description ---
                             df_agent = create_pandas_dataframe_agent(
                                 llm,
                                 active_df,
@@ -286,7 +286,7 @@ if active_df is not None:
                                 allow_dangerous_code=True,
                                 handle_parsing_errors=True,
                                 agent_type="zero-shot-react-description",
-                                prefix=f"You are working with a pandas DataFrame in Python named `df`. Columns: {list(active_df.columns)}. Always use `df` directly without loading any file."
+                                prefix=f"You are working with a pandas DataFrame in Python named `df`. Columns available: {list(active_df.columns)}. The DataFrame is already loaded. Do not try to load any file using read_csv. Always use `df` directly."
                             )
                             context_data = df_agent.run(user_query)
                         except Exception as agent_err:
