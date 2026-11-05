@@ -13,6 +13,9 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from duckduckgo_search import DDGS
 
+# --- Official Pandas DataFrame Agent Import ---
+from langchain_experimental.agents import create_pandas_dataframe_agent
+
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -61,13 +64,11 @@ def get_session_messages(session_id):
     cursor.execute("SELECT user_msg, bot_msg FROM messages WHERE session_id = ?", (session_id,))
     return [{"user": row[0], "bot": row[1]} for row in cursor.fetchall()]
 
-# --- Session State Caches for Performance ---
 if "vector_store_cache" not in st.session_state:
     st.session_state.vector_store_cache = None
 if "last_hash" not in st.session_state:
     st.session_state.last_hash = None
 
-# --- SIDEBAR: Clean Dropdown & Management ---
 with st.sidebar:
     st.markdown("### Navigation & Settings")
     
@@ -128,7 +129,6 @@ with st.sidebar:
             else:
                 st.caption("No messages in this chat yet.")
 
-# --- DATA LOADING & MULTI-FILE HANDLING LOGIC ---
 def load_data(data_option, file_objs=None, default_path="Womens Clothing E-Commerce Reviews.csv/Womens Clothing E-Commerce Reviews.csv"):
     try:
         file_dfs = {}
@@ -190,18 +190,7 @@ else:
         file_dfs, df = {}, None
         d_hash = "none"
 
-@st.cache_resource
-def init_sqlite_db(df_in):
-    try:
-        conn = sqlite3.connect(':memory:', check_same_thread=False)
-        df_in.to_sql('reviews', conn, index=False, if_exists='replace')
-        return conn
-    except Exception as e:
-        return None
-
 if df is not None:
-    db_conn = init_sqlite_db(df)
-    
     files_overview_text = "Uploaded Datasets Summary:\n"
     if file_dfs:
         for fname, fdf in file_dfs.items():
@@ -234,7 +223,6 @@ if df is not None:
     vector_store = st.session_state.vector_store_cache
     retriever = vector_store.as_retriever(search_kwargs={"k": 6}) if vector_store else None
 
-    # --- CENTERED MAIN LAYOUT ---
     left_margin, center_col, right_margin = st.columns([1, 8, 1])
 
     with center_col:
@@ -267,34 +255,30 @@ if df is not None:
                     router_prompt = f"""
                     You are a smart router for an analytics copilot. 
                     Classify the user query into one of four categories:
-                    1. 'SQL' if the query asks for counting, aggregates, statistics, metrics, sorting, or grouping from the database.
+                    1. 'ANALYSIS' if the query asks for counting, aggregates, statistics, metrics, sorting, grouping, top N items, or filtering from the dataset.
                     2. 'RAG' if the query asks for qualitative reasons, feedback details, specific complaints, or opinions from the reviews dataset.
-                    3. 'WEB' if the query asks for current affairs, current political leaders or presidents, real-time facts, market trends, external industry knowledge, or general web facts that require up-to-date web search.
+                    3. 'WEB' if the query asks for current affairs, real-time facts, market trends, external industry knowledge, or general web facts that require up-to-date web search.
                     4. 'GENERAL' if it's a casual greeting (like hi, hello) or general conversation not requiring data lookup or search.
 
                     User Query: {user_query}
                     
-                    Output ONLY ONE WORD: SQL, RAG, WEB, or GENERAL.
+                    Output ONLY ONE WORD: ANALYSIS, RAG, WEB, or GENERAL.
                     """
                     route_type = llm.invoke(router_prompt).content.strip().upper()
                     
                     context_data = ""
-                    if "SQL" in route_type and db_conn:
-                        sql_prompt = f"""
-                        You are a SQLite expert. The table name is `reviews`. 
-                        Columns available: {list(df.columns)}.
-                        Write a valid SQL query to answer the user's question. 
-                        Return ONLY the raw SQL query inside a markdown code block. No explanation.
-                        User Question: {user_query}
-                        """
-                        sql_query_raw = llm.invoke(sql_prompt).content
-                        sql_query = sql_query_raw.replace("```sql", "").replace("```", "").strip()
+                    if "ANALYSIS" in route_type and df is not None:
                         try:
-                            sql_result_df = pd.read_sql_query(sql_query, db_conn)
-                            context_data = f"SQL Query Executed:\n{sql_query}\n\nSQL Results Data:\n{sql_result_df.to_string()}"
-                        except Exception:
-                            docs = retriever.invoke(user_query) if retriever else []
-                            context_data = "\n\n".join([d.page_content for d in docs])
+                            df_agent = create_pandas_dataframe_agent(
+                                llm,
+                                df,
+                                verbose=False,
+                                allow_dangerous_code=True,
+                                handle_parsing_errors=True
+                            )
+                            context_data = df_agent.run(user_query)
+                        except Exception as agent_err:
+                            context_data = f"Pandas Agent execution error: {agent_err}"
                     elif "RAG" in route_type and retriever:
                         docs = retriever.invoke(user_query)
                         context_data = "\n\n".join([d.page_content for d in docs])
@@ -307,7 +291,7 @@ if df is not None:
                             search_result = "\n".join(search_results) if search_results else "No web results found."
                             context_data = f"Web Search Results:\n{search_result}"
                         except Exception as search_err:
-                            context_data = f"Web search failed: {search_err}"
+                            context_data = f"Web search failed: {search_err}."
                     else:
                         if any(keyword in user_query.lower() for keyword in ["data", "file", "overview", "what", "tell me"]):
                             context_data = files_overview_text
@@ -320,7 +304,7 @@ if df is not None:
                             "Strictly follow these rules:\n"
                             "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
                             "2. If the user query is a casual greeting (like hi, hello), reply back politely and concisely without mentioning any datasets.\n"
-                            "3. If Route Type is WEB, you MUST base your answer STRICTLY and EXCLUSIVELY on the provided Web Search Results. Do NOT rely on old pre-trained memory.\n"
+                            "3. If Route Type is WEB, you MUST base your answer STRICTLY and EXCLUSIVELY on the provided Web Search Results.\n"
                             "4. If the user asks about their data or files, list the available uploaded datasets summary and ask which one they want to explore.\n"
                             "5. Keep answers short, crisp, and data-driven."
                         )
