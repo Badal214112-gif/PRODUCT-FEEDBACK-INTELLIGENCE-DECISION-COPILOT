@@ -214,7 +214,6 @@ if active_df is not None:
                 sample_df = active_df.head(2000)
                 docs = []
                 for i, row in sample_df.iterrows():
-                    # Rich structured chunk for powerful semantic vector retrieval
                     row_content = f"Review Index {i} | Rating: {row.get('rating', 'N/A')} | Department: {row.get('department_name', 'N/A')} | Class: {row.get('class_name', 'N/A')} | Review Text: {row.get('review_text', '')}"
                     docs.append(Document(page_content=row_content, metadata={"row": i}))
                 
@@ -230,20 +229,20 @@ if active_df is not None:
 
     vector_store = st.session_state.vector_store_cache
     
-    # --- Advanced RAG Property: MMR (Maximal Marginal Relevance) Retriever ---
-    # Ensures diverse, non-redundant, highly relevant context retrieval
+    # --- Advanced RAG Property: MMR Retriever ---
     retriever = vector_store.as_retriever(
         search_type="mmr", 
         search_kwargs={"k": 5, "fetch_k": 20, "lambda_mult": 0.7}
     ) if vector_store else None
 
-    # --- Direct Robust Pandas Analysis Engine ---
+    # --- Direct Robust Pandas Analysis Engine with Full Column Display ---
     def execute_pandas_analysis(query_str, dataframe):
         try:
             code_prompt = f"""
             You are a Python Pandas expert. The dataframe is loaded as `df`.
             Columns available: {list(dataframe.columns)}.
             Write clean Python code to answer: "{query_str}"
+            Make sure to configure pandas options to display all columns (pd.set_option('display.max_columns', None), pd.set_option('display.width', 1000)).
             Assign the final answer, result, or dataframe head to a variable named `result`.
             Return ONLY Python code inside ```python ... ``` block. No extra text.
             """
