@@ -202,19 +202,21 @@ if active_df is not None:
         for fname, fdf in active_file_dfs.items():
             files_overview_text += f"- File Name: {fname} | Shape (Rows, Cols): {fdf.shape} | Columns: {list(fdf.columns)}\n"
 
+    # --- Advanced RAG Vector Store & Metadata Indexing ---
     if st.session_state.vector_store_cache is None or st.session_state.last_hash != d_hash:
-        with st.spinner("Processing data and preparing search index..."):
+        with st.spinner("Building Advanced RAG Vector Index with Structured Metadata..."):
             embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
             index_path = "vector_index"
             
             if os.path.exists(index_path) and d_hash == "default":
                 vector_store = FAISS.load_local(index_path, embeddings, allow_dangerous_deserialization=True)
             else:
-                sample_df = active_df.head(1000)
+                sample_df = active_df.head(2000)
                 docs = []
                 for i, row in sample_df.iterrows():
-                    row_str = " | ".join([f"{col}: {row[col]}" for col in active_df.columns[:5]])
-                    docs.append(Document(page_content=row_str, metadata={"row": i}))
+                    # Rich structured chunk for powerful semantic vector retrieval
+                    row_content = f"Review Index {i} | Rating: {row.get('rating', 'N/A')} | Department: {row.get('department_name', 'N/A')} | Class: {row.get('class_name', 'N/A')} | Review Text: {row.get('review_text', '')}"
+                    docs.append(Document(page_content=row_content, metadata={"row": i}))
                 
                 if docs:
                     vector_store = FAISS.from_documents(docs, embeddings)
@@ -227,13 +229,19 @@ if active_df is not None:
             st.session_state.last_hash = d_hash
 
     vector_store = st.session_state.vector_store_cache
-    retriever = vector_store.as_retriever(search_kwargs={"k": 6}) if vector_store else None
+    
+    # --- Advanced RAG Property: MMR (Maximal Marginal Relevance) Retriever ---
+    # Ensures diverse, non-redundant, highly relevant context retrieval
+    retriever = vector_store.as_retriever(
+        search_type="mmr", 
+        search_kwargs={"k": 5, "fetch_k": 20, "lambda_mult": 0.7}
+    ) if vector_store else None
 
-    # --- Direct Robust Pandas Analysis Execution (No Broken Agent) ---
+    # --- Direct Robust Pandas Analysis Engine ---
     def execute_pandas_analysis(query_str, dataframe):
         try:
             code_prompt = f"""
-            You are a Python Pandas expert. The pandas dataframe is loaded as `df`.
+            You are a Python Pandas expert. The dataframe is loaded as `df`.
             Columns available: {list(dataframe.columns)}.
             Write clean Python code to answer: "{query_str}"
             Assign the final answer, result, or dataframe head to a variable named `result`.
@@ -298,8 +306,13 @@ if active_df is not None:
                     if "ANALYSIS" in route_type and active_df is not None:
                         context_data = execute_pandas_analysis(user_query, active_df)
                     elif "RAG" in route_type and retriever:
-                        docs = retriever.invoke(user_query)
-                        context_data = "\n\n".join([d.page_content for d in docs])
+                        # --- Advanced RAG Property 1: Query Expansion & Rewriting ---
+                        expansion_prompt = f"Rewrite and expand this user query with relevant product feedback synonyms and keywords for semantic vector search: '{user_query}'"
+                        expanded_query = llm.invoke(expansion_prompt).content.strip()
+                        
+                        # --- Advanced RAG Property 2: MMR Context Retrieval ---
+                        retrieved_docs = retriever.invoke(expanded_query)
+                        context_data = "\n\n".join([d.page_content for d in retrieved_docs])
                     elif "WEB" in route_type:
                         try:
                             search_results = []
@@ -325,7 +338,8 @@ if active_df is not None:
                             "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
                             "2. If the user query is a casual greeting (like hi, hello), reply back politely and concisely without mentioning any datasets.\n"
                             "3. If Route Type is WEB, you MUST base your answer STRICTLY and EXCLUSIVELY on the provided Web Search Results or fallback context.\n"
-                            "4. Keep answers short, crisp, and data-driven."
+                            "4. If Route Type is RAG, synthesize insights accurately from the Advanced RAG context.\n"
+                            "5. Keep answers short, crisp, and data-driven."
                         )
                     )
                     
