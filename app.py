@@ -13,9 +13,6 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from duckduckgo_search import DDGS
 
-# --- Official Pandas DataFrame Agent ---
-from langchain_experimental.agents import create_pandas_dataframe_agent
-
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -232,6 +229,28 @@ if active_df is not None:
     vector_store = st.session_state.vector_store_cache
     retriever = vector_store.as_retriever(search_kwargs={"k": 6}) if vector_store else None
 
+    # --- Direct Robust Pandas Analysis Execution (No Broken Agent) ---
+    def execute_pandas_analysis(query_str, dataframe):
+        try:
+            code_prompt = f"""
+            You are a Python Pandas expert. The pandas dataframe is loaded as `df`.
+            Columns available: {list(dataframe.columns)}.
+            Write clean Python code to answer: "{query_str}"
+            Assign the final answer, result, or dataframe head to a variable named `result`.
+            Return ONLY Python code inside ```python ... ``` block. No extra text.
+            """
+            llm_temp = ChatGroq(model="openai/gpt-oss-20b", groq_api_key=GROQ_API_KEY, temperature=0.0)
+            raw_code = llm_temp.invoke(code_prompt).content
+            clean_code = raw_code.replace("```python", "").replace("```", "").strip()
+            
+            local_vars = {"df": dataframe, "pd": pd}
+            exec(clean_code, {}, local_vars)
+            
+            res = local_vars.get("result", "विश्लेषण सफल रहा।")
+            return str(res)
+        except Exception as ex:
+            return f"Analysis execution error: {ex}"
+
     left_margin, center_col, right_margin = st.columns([1, 8, 1])
 
     with center_col:
@@ -277,27 +296,7 @@ if active_df is not None:
                     
                     context_data = ""
                     if "ANALYSIS" in route_type and active_df is not None:
-                        try:
-                            # --- Explicit Data Context Injection into Agent Prefix ---
-                            dataset_sample = active_df.head(3).to_string()
-                            agent_prefix = (
-                                f"You are working with a pandas DataFrame in Python named `df`. "
-                                f"Dataset shape: {active_df.shape}. Columns: {list(active_df.columns)}. "
-                                f"Here is a sample of the data:\n{dataset_sample}\n\n"
-                                f"The DataFrame `df` is already loaded in memory. NEVER use pd.read_csv or try to load any file. Always use `df` directly."
-                            )
-                            df_agent = create_pandas_dataframe_agent(
-                                llm,
-                                active_df,
-                                verbose=False,
-                                allow_dangerous_code=True,
-                                handle_parsing_errors=True,
-                                agent_type="zero-shot-react-description",
-                                prefix=agent_prefix
-                            )
-                            context_data = df_agent.run(user_query)
-                        except Exception as agent_err:
-                            context_data = f"Pandas Agent error: {agent_err}"
+                        context_data = execute_pandas_analysis(user_query, active_df)
                     elif "RAG" in route_type and retriever:
                         docs = retriever.invoke(user_query)
                         context_data = "\n\n".join([d.page_content for d in docs])
@@ -326,8 +325,7 @@ if active_df is not None:
                             "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
                             "2. If the user query is a casual greeting (like hi, hello), reply back politely and concisely without mentioning any datasets.\n"
                             "3. If Route Type is WEB, you MUST base your answer STRICTLY and EXCLUSIVELY on the provided Web Search Results or fallback context.\n"
-                            "4. If the user asks about their data or files, list the available uploaded datasets summary and ask which one they want to explore.\n"
-                            "5. Keep answers short, crisp, and data-driven."
+                            "4. Keep answers short, crisp, and data-driven."
                         )
                     )
                     

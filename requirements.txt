@@ -10,5 +10,4 @@ langchain-groq
 python-dotenv
 rank-bm25
 duckduckgo_search
-langchain-experimental
 tabulate
