@@ -274,7 +274,8 @@ if df is not None:
                                 df,
                                 verbose=False,
                                 allow_dangerous_code=True,
-                                handle_parsing_errors=True
+                                handle_parsing_errors=True,
+                                prefix="You are working with a pandas DataFrame in Python named `df`. The DataFrame is already loaded and ready to use. Do not attempt to load any CSV or Excel files using pd.read_csv. Use `df` directly."
                             )
                             context_data = df_agent.run(user_query)
                         except Exception as agent_err:
@@ -285,13 +286,15 @@ if df is not None:
                     elif "WEB" in route_type:
                         try:
                             search_results = []
-                            with DDGS() as ddgs:
+                            with DDGS(timeout=10) as ddgs:
                                 for r in ddgs.text(user_query, max_results=3):
                                     search_results.append(r.get('body', ''))
                             search_result = "\n".join(search_results) if search_results else "No web results found."
                             context_data = f"Web Search Results:\n{search_result}"
                         except Exception as search_err:
-                            context_data = f"Web search failed: {search_err}."
+                            docs = retriever.invoke(user_query) if retriever else []
+                            rag_fallback = "\n\n".join([d.page_content for d in docs]) if docs else "Web search network/DNS issue ki wajah se unavailable hai."
+                            context_data = f"Web search failed ({search_err}). Fallback dataset context:\n{rag_fallback}"
                     else:
                         if any(keyword in user_query.lower() for keyword in ["data", "file", "overview", "what", "tell me"]):
                             context_data = files_overview_text
@@ -304,7 +307,7 @@ if df is not None:
                             "Strictly follow these rules:\n"
                             "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
                             "2. If the user query is a casual greeting (like hi, hello), reply back politely and concisely without mentioning any datasets.\n"
-                            "3. If Route Type is WEB, you MUST base your answer STRICTLY and EXCLUSIVELY on the provided Web Search Results.\n"
+                            "3. If Route Type is WEB, you MUST base your answer STRICTLY and EXCLUSIVELY on the provided Web Search Results or fallback context.\n"
                             "4. If the user asks about their data or files, list the available uploaded datasets summary and ask which one they want to explore.\n"
                             "5. Keep answers short, crisp, and data-driven."
                         )
@@ -336,11 +339,11 @@ if df is not None:
                     
                     web_context = ""
                     try:
-                        with DDGS() as ddgs:
+                        with DDGS(timeout=10) as ddgs:
                             results = [r.get('body', '') for r in ddgs.text(f"market trends and best practices for {user_query}", max_results=3)]
                         web_context = "\n".join(results) if results else "Web search unavailable."
                     except Exception:
-                        web_context = "Web search unavailable."
+                        web_context = "Web search network/DNS issue ki wajah se unavailable hai (fallback active)."
                     
                     combined_context = f"Internal Dataset Context:\n{rag_context}\n\nExternal Market Context:\n{web_context}"
                     
