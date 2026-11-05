@@ -3,6 +3,7 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
+from typing import TypedDict
 
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -12,6 +13,9 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from duckduckgo_search import DDGS
+
+# --- LangGraph Imports ---
+from langgraph.graph import StateGraph, END
 
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -237,28 +241,117 @@ if active_df is not None:
         search_kwargs={"k": 5, "fetch_k": 20, "lambda_mult": 0.7}
     ) if vector_store else None
 
-    # --- Direct Robust Pandas Analysis Engine with Full Column Display ---
-    def execute_pandas_analysis(query_str, dataframe):
+    # --- LangGraph State Definition ---
+    class CopilotState(TypedDict):
+        user_query: str
+        route: str
+        context_data: str
+        dataframe: pd.DataFrame
+
+    # --- LangGraph Nodes ---
+    llm = ChatGroq(model="openai/gpt-oss-20b", groq_api_key=GROQ_API_KEY, temperature=0.0)
+
+    def router_node(state: CopilotState):
+        query = state["user_query"]
+        router_prompt = f"""
+        You are a smart router for an analytics copilot. 
+        Classify the user query into one of four categories:
+        1. 'ANALYSIS' ONLY if the query explicitly asks for tabular operations: counting rows, showing top N rows, shape, summary statistics, specific columns, filtering, or metrics.
+        2. 'RAG' if the query asks for qualitative reasons, customer complaints, why customers are unhappy, feedback details, opinions, or sentiment from reviews.
+        3. 'WEB' if the query asks for current affairs, real-time facts, market trends, or external industry knowledge.
+        4. 'GENERAL' if it's a casual greeting or general conversation.
+
+        User Query: {query}
+        Output ONLY ONE WORD: ANALYSIS, RAG, WEB, or GENERAL.
+        """
+        route = llm.invoke(router_prompt).content.strip().upper()
+        if route not in ["ANALYSIS", "RAG", "WEB", "GENERAL"]:
+            route = "GENERAL"
+        return {"route": route}
+
+    def analysis_node(state: CopilotState):
+        query = state["user_query"]
+        df = state["dataframe"]
         try:
             code_prompt = f"""
             You are a Python Pandas expert. The dataframe is loaded as `df`.
-            Columns available: {list(dataframe.columns)}.
-            Write clean Python code to answer: "{query_str}"
+            Columns available: {list(df.columns)}.
+            Write clean Python code to answer: "{query}"
             Make sure to configure pandas options to display all columns (pd.set_option('display.max_columns', None), pd.set_option('display.width', 1000)).
             Assign the final answer, result, or dataframe head to a variable named `result`.
             Return ONLY Python code inside ```python ... ``` block. No extra text.
             """
-            llm_temp = ChatGroq(model="openai/gpt-oss-20b", groq_api_key=GROQ_API_KEY, temperature=0.0)
-            raw_code = llm_temp.invoke(code_prompt).content
+            raw_code = llm.invoke(code_prompt).content
             clean_code = raw_code.replace("```python", "").replace("```", "").strip()
             
-            local_vars = {"df": dataframe, "pd": pd}
+            local_vars = {"df": df, "pd": pd}
             exec(clean_code, {}, local_vars)
-            
             res = local_vars.get("result", "विश्लेषण सफल रहा।")
-            return str(res)
+            return {"context_data": str(res)}
         except Exception as ex:
-            return f"Analysis execution error: {ex}"
+            return {"context_data": f"Analysis execution error: {ex}"}
+
+    def rag_node(state: CopilotState):
+        query = state["user_query"]
+        if not retriever:
+            return {"context_data": "Vector store not available."}
+        
+        # Advanced RAG Property 1: Query Expansion & Rewriting
+        expansion_prompt = f"Rewrite and expand this user query with relevant customer feedback synonyms and keywords for semantic vector search: '{query}'"
+        expanded_query = llm.invoke(expansion_prompt).content.strip()
+        
+        # Advanced RAG Property 2: MMR Context Retrieval
+        retrieved_docs = retriever.invoke(expanded_query)
+        context = "\n\n".join([d.page_content for d in retrieved_docs])
+        return {"context_data": context}
+
+    def web_node(state: CopilotState):
+        query = state["user_query"]
+        try:
+            search_results = []
+            with DDGS(timeout=10) as ddgs:
+                for r in ddgs.text(query, max_results=3):
+                    search_results.append(r.get('body', ''))
+            search_result = "\n".join(search_results) if search_results else "No web results found."
+            return {"context_data": f"Web Search Results:\n{search_result}"}
+        except Exception as search_err:
+            docs = retriever.invoke(query) if retriever else []
+            rag_fallback = "\n\n".join([d.page_content for d in docs]) if docs else "Web search unavailable."
+            return {"context_data": f"Web search failed ({search_err}). Fallback context:\n{rag_fallback}"}
+
+    def general_node(state: CopilotState):
+        query = state["user_query"]
+        if any(keyword in query.lower() for keyword in ["data", "file", "overview", "what", "tell me"]):
+            return {"context_data": files_overview_text}
+        return {"context_data": "General conversation or greeting."}
+
+    # --- Build LangGraph Workflow ---
+    workflow = StateGraph(CopilotState)
+    workflow.add_node("router", router_node)
+    workflow.add_node("analysis", analysis_node)
+    workflow.add_node("rag", rag_node)
+    workflow.add_node("web", web_node)
+    workflow.add_node("general", general_node)
+
+    workflow.set_entry_point("router")
+
+    workflow.add_conditional_edges(
+        "router",
+        lambda state: state["route"],
+        {
+            "ANALYSIS": "analysis",
+            "RAG": "rag",
+            "WEB": "web",
+            "GENERAL": "general"
+        }
+    )
+
+    workflow.add_edge("analysis", END)
+    workflow.add_edge("rag", END)
+    workflow.add_edge("web", END)
+    workflow.add_edge("general", END)
+
+    copilot_graph = workflow.compile()
 
     left_margin, center_col, right_margin = st.columns([1, 8, 1])
 
@@ -287,51 +380,17 @@ if active_df is not None:
                 st.error("Error: GROQ_API_KEY is not set in environment variables.")
             else:
                 try:
-                    llm = ChatGroq(model="openai/gpt-oss-20b", groq_api_key=GROQ_API_KEY, temperature=0.0)
+                    # Invoke LangGraph State Workflow
+                    initial_state = {
+                        "user_query": user_query,
+                        "route": "",
+                        "context_data": "",
+                        "dataframe": active_df
+                    }
+                    final_state = copilot_graph.invoke(initial_state)
                     
-                    # --- Stricter Router to separate Analysis (Data/Rows) from RAG (Why/Qualitative) ---
-                    router_prompt = f"""
-                    You are a smart router for an analytics copilot. 
-                    Classify the user query into one of four categories:
-                    1. 'ANALYSIS' ONLY if the query explicitly asks for tabular operations: counting rows, showing top N rows, shape, summary statistics, specific columns, filtering, or metrics.
-                    2. 'RAG' if the query asks for qualitative reasons, customer complaints, why customers are unhappy, feedback details, opinions, or sentiment from reviews.
-                    3. 'WEB' if the query asks for current affairs, real-time facts, market trends, or external industry knowledge.
-                    4. 'GENERAL' if it's a casual greeting or general conversation.
-
-                    User Query: {user_query}
-                    
-                    Output ONLY ONE WORD: ANALYSIS, RAG, WEB, or GENERAL.
-                    """
-                    route_type = llm.invoke(router_prompt).content.strip().upper()
-                    
-                    context_data = ""
-                    if "ANALYSIS" in route_type and active_df is not None:
-                        context_data = execute_pandas_analysis(user_query, active_df)
-                    elif "RAG" in route_type and retriever:
-                        # --- Advanced RAG Property 1: Query Expansion & Rewriting ---
-                        expansion_prompt = f"Rewrite and expand this user query with relevant customer feedback synonyms and keywords for semantic vector search: '{user_query}'"
-                        expanded_query = llm.invoke(expansion_prompt).content.strip()
-                        
-                        # --- Advanced RAG Property 2: MMR Context Retrieval ---
-                        retrieved_docs = retriever.invoke(expanded_query)
-                        context_data = "\n\n".join([d.page_content for d in retrieved_docs])
-                    elif "WEB" in route_type:
-                        try:
-                            search_results = []
-                            with DDGS(timeout=10) as ddgs:
-                                for r in ddgs.text(user_query, max_results=3):
-                                    search_results.append(r.get('body', ''))
-                            search_result = "\n".join(search_results) if search_results else "No web results found."
-                            context_data = f"Web Search Results:\n{search_result}"
-                        except Exception as search_err:
-                            docs = retriever.invoke(user_query) if retriever else []
-                            rag_fallback = "\n\n".join([d.page_content for d in docs]) if docs else "Web search network/DNS issue ki wajah se unavailable hai."
-                            context_data = f"Web search failed ({search_err}). Fallback dataset context:\n{rag_fallback}"
-                    else:
-                        if any(keyword in user_query.lower() for keyword in ["data", "file", "overview", "what", "tell me"]):
-                            context_data = files_overview_text
-                        else:
-                            context_data = "General conversation or greeting."
+                    route_type = final_state["route"]
+                    context_data = final_state["context_data"]
 
                     system_msg = SystemMessage(
                         content=(
@@ -363,8 +422,6 @@ if active_df is not None:
                 st.error("Error: GROQ_API_KEY is not set in environment variables.")
             else:
                 try:
-                    llm = ChatGroq(model="openai/gpt-oss-20b", groq_api_key=GROQ_API_KEY, temperature=0.0)
-                    
                     docs = retriever.invoke(user_query) if retriever else []
                     rag_context = "\n\n".join([d.page_content for d in docs])
                     
