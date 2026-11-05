@@ -214,8 +214,10 @@ if active_df is not None:
                 sample_df = active_df.head(2000)
                 docs = []
                 for i, row in sample_df.iterrows():
-                    row_content = f"Review Index {i} | Rating: {row.get('rating', 'N/A')} | Department: {row.get('department_name', 'N/A')} | Class: {row.get('class_name', 'N/A')} | Review Text: {row.get('review_text', '')}"
-                    docs.append(Document(page_content=row_content, metadata={"row": i}))
+                    rev_text = str(row.get('review_text', '')).strip()
+                    if rev_text and rev_text.lower() != 'nan':
+                        row_content = f"Review Index {i} | Rating: {row.get('rating', 'N/A')} | Department: {row.get('department_name', 'N/A')} | Class: {row.get('class_name', 'N/A')} | Review Text: {rev_text}"
+                        docs.append(Document(page_content=row_content, metadata={"row": i}))
                 
                 if docs:
                     vector_store = FAISS.from_documents(docs, embeddings)
@@ -287,13 +289,14 @@ if active_df is not None:
                 try:
                     llm = ChatGroq(model="openai/gpt-oss-20b", groq_api_key=GROQ_API_KEY, temperature=0.0)
                     
+                    # --- Stricter Router to separate Analysis (Data/Rows) from RAG (Why/Qualitative) ---
                     router_prompt = f"""
                     You are a smart router for an analytics copilot. 
                     Classify the user query into one of four categories:
-                    1. 'ANALYSIS' if the query asks for counting, aggregates, statistics, metrics, sorting, grouping, top N items, viewing rows, or filtering from the dataset.
-                    2. 'RAG' if the query asks for qualitative reasons, feedback details, specific complaints, or opinions from the reviews dataset.
-                    3. 'WEB' if the query asks for current affairs, real-time facts, market trends, external industry knowledge, or general web facts that require up-to-date web search.
-                    4. 'GENERAL' if it's a casual greeting (like hi, hello) or general conversation not requiring data lookup or search.
+                    1. 'ANALYSIS' ONLY if the query explicitly asks for tabular operations: counting rows, showing top N rows, shape, summary statistics, specific columns, filtering, or metrics.
+                    2. 'RAG' if the query asks for qualitative reasons, customer complaints, why customers are unhappy, feedback details, opinions, or sentiment from reviews.
+                    3. 'WEB' if the query asks for current affairs, real-time facts, market trends, or external industry knowledge.
+                    4. 'GENERAL' if it's a casual greeting or general conversation.
 
                     User Query: {user_query}
                     
@@ -306,7 +309,7 @@ if active_df is not None:
                         context_data = execute_pandas_analysis(user_query, active_df)
                     elif "RAG" in route_type and retriever:
                         # --- Advanced RAG Property 1: Query Expansion & Rewriting ---
-                        expansion_prompt = f"Rewrite and expand this user query with relevant product feedback synonyms and keywords for semantic vector search: '{user_query}'"
+                        expansion_prompt = f"Rewrite and expand this user query with relevant customer feedback synonyms and keywords for semantic vector search: '{user_query}'"
                         expanded_query = llm.invoke(expansion_prompt).content.strip()
                         
                         # --- Advanced RAG Property 2: MMR Context Retrieval ---
@@ -335,10 +338,9 @@ if active_df is not None:
                             "You are an expert AI Product Analyst and Customer Insights Copilot. "
                             "Strictly follow these rules:\n"
                             "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
-                            "2. If the user query is a casual greeting (like hi, hello), reply back politely and concisely without mentioning any datasets.\n"
-                            "3. If Route Type is WEB, you MUST base your answer STRICTLY and EXCLUSIVELY on the provided Web Search Results or fallback context.\n"
-                            "4. If Route Type is RAG, synthesize insights accurately from the Advanced RAG context.\n"
-                            "5. Keep answers short, crisp, and data-driven."
+                            "2. If Route Type is RAG, DO NOT output markdown tables or raw database dumps. Provide a rich, professional, analytical textual explanation synthesizing the customer reviews context.\n"
+                            "3. If Route Type is ANALYSIS, present the exact tabular data or statistics requested.\n"
+                            "4. Keep answers short, crisp, and data-driven."
                         )
                     )
                     
