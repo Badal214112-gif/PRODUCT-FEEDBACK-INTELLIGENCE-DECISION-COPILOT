@@ -13,7 +13,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from duckduckgo_search import DDGS
 
-# --- Official Pandas DataFrame Agent & Tools ---
+# --- Official Pandas DataFrame Agent ---
 from langchain_experimental.agents import create_pandas_dataframe_agent
 
 load_dotenv()
@@ -278,12 +278,13 @@ if active_df is not None:
                     context_data = ""
                     if "ANALYSIS" in route_type and active_df is not None:
                         try:
-                            # --- Strict Official Pandas DataFrame Agent with Pre-bound DataFrame & Custom Prefix ---
+                            # --- Explicit Data Context Injection into Agent Prefix ---
+                            dataset_sample = active_df.head(3).to_string()
                             agent_prefix = (
                                 f"You are working with a pandas DataFrame in Python named `df`. "
-                                f"The DataFrame has shape {active_df.shape} and columns {list(active_df.columns)}. "
-                                f"It is already loaded into memory. NEVER attempt to load any CSV or Excel file using read_csv or read_excel. "
-                                f"Always use the existing `df` variable directly for all queries."
+                                f"Dataset shape: {active_df.shape}. Columns: {list(active_df.columns)}. "
+                                f"Here is a sample of the data:\n{dataset_sample}\n\n"
+                                f"The DataFrame `df` is already loaded in memory. NEVER use pd.read_csv or try to load any file. Always use `df` directly."
                             )
                             df_agent = create_pandas_dataframe_agent(
                                 llm,
