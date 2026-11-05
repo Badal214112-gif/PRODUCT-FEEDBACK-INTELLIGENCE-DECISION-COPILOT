@@ -13,7 +13,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from duckduckgo_search import DDGS
 
-# --- Official Pandas DataFrame Agent ---
+# --- Official Pandas DataFrame Agent & Tools ---
 from langchain_experimental.agents import create_pandas_dataframe_agent
 
 load_dotenv()
@@ -278,7 +278,13 @@ if active_df is not None:
                     context_data = ""
                     if "ANALYSIS" in route_type and active_df is not None:
                         try:
-                            # --- Official DataFrame Agent with Zero-Shot React Description ---
+                            # --- Strict Official Pandas DataFrame Agent with Pre-bound DataFrame & Custom Prefix ---
+                            agent_prefix = (
+                                f"You are working with a pandas DataFrame in Python named `df`. "
+                                f"The DataFrame has shape {active_df.shape} and columns {list(active_df.columns)}. "
+                                f"It is already loaded into memory. NEVER attempt to load any CSV or Excel file using read_csv or read_excel. "
+                                f"Always use the existing `df` variable directly for all queries."
+                            )
                             df_agent = create_pandas_dataframe_agent(
                                 llm,
                                 active_df,
@@ -286,7 +292,7 @@ if active_df is not None:
                                 allow_dangerous_code=True,
                                 handle_parsing_errors=True,
                                 agent_type="zero-shot-react-description",
-                                prefix=f"You are working with a pandas DataFrame in Python named `df`. Columns available: {list(active_df.columns)}. The DataFrame is already loaded. Do not try to load any file using read_csv. Always use `df` directly."
+                                prefix=agent_prefix
                             )
                             context_data = df_agent.run(user_query)
                         except Exception as agent_err:
