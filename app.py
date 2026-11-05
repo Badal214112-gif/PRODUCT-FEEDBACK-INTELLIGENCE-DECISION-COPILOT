@@ -13,7 +13,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from duckduckgo_search import DDGS
 
-# --- Official Pandas DataFrame Agent Import ---
+# --- Official Pandas DataFrame Agent ---
 from langchain_experimental.agents import create_pandas_dataframe_agent
 
 load_dotenv()
@@ -181,19 +181,28 @@ def load_data(data_option, file_objs=None, default_path="Womens Clothing E-Comme
 
 if data_source_option == "Default Dataset":
     file_dfs, df = load_data("Default Dataset", None)
+    st.session_state.df = df
+    st.session_state.file_dfs = file_dfs
     d_hash = "default"
 else:
     if uploaded_files:
         file_dfs, df = load_data("Upload Custom Files", uploaded_files)
+        st.session_state.df = df
+        st.session_state.file_dfs = file_dfs
         d_hash = str(df.shape) if df is not None else "empty"
     else:
         file_dfs, df = {}, None
+        st.session_state.df = None
+        st.session_state.file_dfs = {}
         d_hash = "none"
 
-if df is not None:
+active_df = st.session_state.get("df", None)
+active_file_dfs = st.session_state.get("file_dfs", {})
+
+if active_df is not None:
     files_overview_text = "Uploaded Datasets Summary:\n"
-    if file_dfs:
-        for fname, fdf in file_dfs.items():
+    if active_file_dfs:
+        for fname, fdf in active_file_dfs.items():
             files_overview_text += f"- File Name: {fname} | Shape (Rows, Cols): {fdf.shape} | Columns: {list(fdf.columns)}\n"
 
     if st.session_state.vector_store_cache is None or st.session_state.last_hash != d_hash:
@@ -204,10 +213,10 @@ if df is not None:
             if os.path.exists(index_path) and d_hash == "default":
                 vector_store = FAISS.load_local(index_path, embeddings, allow_dangerous_deserialization=True)
             else:
-                sample_df = df.head(1000)
+                sample_df = active_df.head(1000)
                 docs = []
                 for i, row in sample_df.iterrows():
-                    row_str = " | ".join([f"{col}: {row[col]}" for col in df.columns[:5]])
+                    row_str = " | ".join([f"{col}: {row[col]}" for col in active_df.columns[:5]])
                     docs.append(Document(page_content=row_str, metadata={"row": i}))
                 
                 if docs:
@@ -229,11 +238,11 @@ if df is not None:
         st.title("AI Product Intelligence Copilot")
         
         with st.expander("View Dataset Preview", expanded=False):
-            if file_dfs:
-                selected_preview_file = st.selectbox("Select file to preview:", list(file_dfs.keys()))
-                st.dataframe(file_dfs[selected_preview_file].head(10), use_container_width=True)
+            if active_file_dfs:
+                selected_preview_file = st.selectbox("Select file to preview:", list(active_file_dfs.keys()))
+                st.dataframe(active_file_dfs[selected_preview_file].head(10), use_container_width=True)
             else:
-                st.dataframe(df.head(10), use_container_width=True)
+                st.dataframe(active_df.head(10), use_container_width=True)
 
         st.markdown("### Ask Anything About Product Feedback")
         
@@ -255,7 +264,7 @@ if df is not None:
                     router_prompt = f"""
                     You are a smart router for an analytics copilot. 
                     Classify the user query into one of four categories:
-                    1. 'ANALYSIS' if the query asks for counting, aggregates, statistics, metrics, sorting, grouping, top N items, or filtering from the dataset.
+                    1. 'ANALYSIS' if the query asks for counting, aggregates, statistics, metrics, sorting, grouping, top N items, viewing rows, or filtering from the dataset.
                     2. 'RAG' if the query asks for qualitative reasons, feedback details, specific complaints, or opinions from the reviews dataset.
                     3. 'WEB' if the query asks for current affairs, real-time facts, market trends, external industry knowledge, or general web facts that require up-to-date web search.
                     4. 'GENERAL' if it's a casual greeting (like hi, hello) or general conversation not requiring data lookup or search.
@@ -267,19 +276,25 @@ if df is not None:
                     route_type = llm.invoke(router_prompt).content.strip().upper()
                     
                     context_data = ""
-                    if "ANALYSIS" in route_type and df is not None:
+                    if "ANALYSIS" in route_type and active_df is not None:
                         try:
+                            # --- Robust Official create_pandas_dataframe_agent with Explicit Context Prefix ---
+                            df_info = f"DataFrame shape: {active_df.shape}, Columns: {list(active_df.columns)}"
+                            custom_prefix = f"""You are working with a pandas DataFrame in Python named `df`. 
+                            {df_info}
+                            The DataFrame is already loaded into memory. Do not use pd.read_csv or try to load any files. Always use `df` directly for all operations."""
+                            
                             df_agent = create_pandas_dataframe_agent(
                                 llm,
-                                df,
+                                active_df,
                                 verbose=False,
                                 allow_dangerous_code=True,
                                 handle_parsing_errors=True,
-                                prefix="You are working with a pandas DataFrame in Python named `df`. The DataFrame is already loaded and ready to use. Do not attempt to load any CSV or Excel files using pd.read_csv. Use `df` directly."
+                                prefix=custom_prefix
                             )
                             context_data = df_agent.run(user_query)
                         except Exception as agent_err:
-                            context_data = f"Pandas Agent execution error: {agent_err}"
+                            context_data = f"Pandas Agent error: {agent_err}"
                     elif "RAG" in route_type and retriever:
                         docs = retriever.invoke(user_query)
                         context_data = "\n\n".join([d.page_content for d in docs])
