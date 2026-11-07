@@ -9,3 +9,4 @@ def add_to_memory(user_query, bot_response):
 
 def get_memory():
     return st.session_state.chat_history
+
