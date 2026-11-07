@@ -62,7 +62,7 @@ if "current_session_id" not in st.session_state:
 
 def get_session_messages(session_id):
     cursor = chat_conn.cursor()
-    cursor.execute("SELECT user_msg, bot_msg FROM messages WHERE session_id = ?", (session_id,))
+    cursor.execute("SELECT user_msg, bot_msg FROM messages WHERE session_id = ? ORDER BY id ASC", (session_id,))
     return [{"user": row[0], "bot": row[1]} for row in cursor.fetchall()]
 
 if "vector_store_cache" not in st.session_state:
@@ -259,7 +259,7 @@ if active_df is not None:
         1. 'ANALYSIS' ONLY if the query explicitly asks for tabular operations: counting rows, showing top N rows, shape, summary statistics, specific columns, filtering, or metrics.
         2. 'RAG' if the query asks for qualitative reasons, customer complaints, why customers are unhappy, feedback details, opinions, or sentiment from reviews.
         3. 'WEB' if the query asks for current affairs, real-time facts, market trends, or external industry knowledge.
-        4. 'GENERAL' if it's a casual greeting, general conversation, logic puzzle, math, or personal questions.
+        4. 'GENERAL' if it's a casual greeting, general conversation, logic puzzle, math calculation, comparison, or referring back to prior conversation turns.
 
         User Query: {query}
         Output ONLY ONE WORD: ANALYSIS, RAG, WEB, or GENERAL.
@@ -296,11 +296,9 @@ if active_df is not None:
         if not retriever:
             return {"context_data": "Vector store not available."}
         
-        # Advanced RAG Property 1: Query Expansion & Rewriting
         expansion_prompt = f"Rewrite and expand this user query with relevant customer feedback synonyms and keywords for semantic vector search: '{query}'"
         expanded_query = llm.invoke(expansion_prompt).content.strip()
         
-        # Advanced RAG Property 2: MMR Context Retrieval
         retrieved_docs = retriever.invoke(expanded_query)
         context = "\n\n".join([d.page_content for d in retrieved_docs])
         return {"context_data": context}
@@ -397,14 +395,15 @@ if active_df is not None:
                             "You are an expert AI Product Analyst and Conversational Assistant. "
                             "Strictly follow these rules:\n"
                             "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
-                            "2. If Route Type is GENERAL or the query is general logic/math, rely on the conversational history and answer directly without forcing irrelevant dataset context.\n"
-                            "3. If Route Type is RAG, provide a rich, professional, analytical textual explanation synthesizing the customer reviews context.\n"
-                            "4. If Route Type is ANALYSIS, present the exact tabular data or statistics requested.\n"
-                            "5. Keep answers short, crisp, and precise."
+                            "2. Pay extreme attention to the conversation history list provided below. If the user refers to previous numbers, answers, or entities (e.g., 'smallest one', 'add 3'), retrieve them directly from the history instead of guessing or ignoring them.\n"
+                            "3. If Route Type is GENERAL or the query is math/logic/comparison, rely primarily on the conversation history and answer correctly without forcing irrelevant dataset context.\n"
+                            "4. If Route Type is RAG, provide a rich analytical textual explanation synthesizing customer reviews.\n"
+                            "5. If Route Type is ANALYSIS, present the exact tabular data requested.\n"
+                            "6. Keep answers short, crisp, and precise."
                         )
                     )
                     
-                    # --- LOOP & LIST: Build conversation history list from SQLite database ---
+                    # --- STRICT SESSION-SPECIFIC HISTORY LIST LOOP ---
                     past_messages = get_session_messages(current_id)
                     history_messages = []
                     for msg in past_messages:
@@ -414,7 +413,7 @@ if active_df is not None:
                     # Current turn message
                     human_msg = HumanMessage(content=f"Route Type: {route_type}\n\nContext Data:\n{context_data}\n\nUser Query:\n{user_query}")
                     
-                    # Construct complete prompt list loop
+                    # Complete strict list loop passed to LLM
                     prompt_messages = [system_msg] + history_messages + [human_msg]
                     prompt = ChatPromptTemplate.from_messages(prompt_messages)
                     chain = prompt | llm | StrOutputParser()
@@ -422,7 +421,7 @@ if active_df is not None:
                     st.markdown("### AI Analysis")
                     response = st.write_stream(chain.stream({}))
                     
-                    # Save current exchange to SQLite database
+                    # Save current exchange to active session SQLite database
                     cursor = chat_conn.cursor()
                     cursor.execute("INSERT INTO messages (session_id, user_msg, bot_msg) VALUES (?, ?, ?)", (current_id, user_query, response))
                     chat_conn.commit()
