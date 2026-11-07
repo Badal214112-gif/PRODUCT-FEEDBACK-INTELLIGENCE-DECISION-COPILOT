@@ -3,7 +3,6 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-from typing import TypedDict
 
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
@@ -13,9 +12,6 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from duckduckgo_search import DDGS
-
-# --- LangGraph Imports ---
-from langgraph.graph import StateGraph, END
 
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -241,115 +237,7 @@ if active_df is not None:
         search_kwargs={"k": 5, "fetch_k": 20, "lambda_mult": 0.7}
     ) if vector_store else None
 
-    # --- LangGraph State Definition ---
-    class CopilotState(TypedDict):
-        user_query: str
-        route: str
-        context_data: str
-        dataframe: pd.DataFrame
-
-    # --- LangGraph Nodes ---
     llm = ChatGroq(model="openai/gpt-oss-20b", groq_api_key=GROQ_API_KEY, temperature=0.0)
-
-    def router_node(state: CopilotState):
-        query = state["user_query"]
-        router_prompt = f"""
-        You are a smart router for an analytics copilot. 
-        Classify the user query into one of four categories:
-        1. 'ANALYSIS' ONLY if the query explicitly asks for tabular operations: counting rows, showing top N rows, shape, summary statistics, specific columns, filtering, or metrics.
-        2. 'RAG' if the query asks for qualitative reasons, customer complaints, why customers are unhappy, feedback details, opinions, or sentiment from reviews.
-        3. 'WEB' if the query asks for current affairs, real-time facts, market trends, or external industry knowledge.
-        4. 'GENERAL' if it's a casual greeting, general conversation, logic puzzle, math calculation, comparison, or referring back to prior conversation turns.
-
-        User Query: {query}
-        Output ONLY ONE WORD: ANALYSIS, RAG, WEB, or GENERAL.
-        """
-        route = llm.invoke(router_prompt).content.strip().upper()
-        if route not in ["ANALYSIS", "RAG", "WEB", "GENERAL"]:
-            route = "GENERAL"
-        return {"route": route}
-
-    def analysis_node(state: CopilotState):
-        query = state["user_query"]
-        df = state["dataframe"]
-        try:
-            code_prompt = f"""
-            You are a Python Pandas expert. The dataframe is loaded as `df`.
-            Columns available: {list(df.columns)}.
-            Write clean Python code to answer: "{query}"
-            Make sure to configure pandas options to display all columns (pd.set_option('display.max_columns', None), pd.set_option('display.width', 1000)).
-            Assign the final answer, result, or dataframe head to a variable named `result`.
-            Return ONLY Python code inside ```python ... ``` block. No extra text.
-            """
-            raw_code = llm.invoke(code_prompt).content
-            clean_code = raw_code.replace("```python", "").replace("```", "").strip()
-            
-            local_vars = {"df": df, "pd": pd}
-            exec(clean_code, {}, local_vars)
-            res = local_vars.get("result", "विश्लेषण सफल रहा।")
-            return {"context_data": str(res)}
-        except Exception as ex:
-            return {"context_data": f"Analysis execution error: {ex}"}
-
-    def rag_node(state: CopilotState):
-        query = state["user_query"]
-        if not retriever:
-            return {"context_data": "Vector store not available."}
-        
-        expansion_prompt = f"Rewrite and expand this user query with relevant customer feedback synonyms and keywords for semantic vector search: '{query}'"
-        expanded_query = llm.invoke(expansion_prompt).content.strip()
-        
-        retrieved_docs = retriever.invoke(expanded_query)
-        context = "\n\n".join([d.page_content for d in retrieved_docs])
-        return {"context_data": context}
-
-    def web_node(state: CopilotState):
-        query = state["user_query"]
-        try:
-            search_results = []
-            with DDGS(timeout=10) as ddgs:
-                for r in ddgs.text(query, max_results=3):
-                    search_results.append(r.get('body', ''))
-            search_result = "\n".join(search_results) if search_results else "No web results found."
-            return {"context_data": f"Web Search Results:\n{search_result}"}
-        except Exception as search_err:
-            docs = retriever.invoke(query) if retriever else []
-            rag_fallback = "\n\n".join([d.page_content for d in docs]) if docs else "Web search unavailable."
-            return {"context_data": f"Web search failed ({search_err}). Fallback context:\n{rag_fallback}"}
-
-    def general_node(state: CopilotState):
-        query = state["user_query"]
-        if any(keyword in query.lower() for keyword in ["data", "file", "overview", "what", "tell me"]):
-            return {"context_data": files_overview_text}
-        return {"context_data": "General conversation or logic/math processing."}
-
-    # --- Build LangGraph Workflow ---
-    workflow = StateGraph(CopilotState)
-    workflow.add_node("router", router_node)
-    workflow.add_node("analysis", analysis_node)
-    workflow.add_node("rag", rag_node)
-    workflow.add_node("web", web_node)
-    workflow.add_node("general", general_node)
-
-    workflow.set_entry_point("router")
-
-    workflow.add_conditional_edges(
-        "router",
-        lambda state: state["route"],
-        {
-            "ANALYSIS": "analysis",
-            "RAG": "rag",
-            "WEB": "web",
-            "GENERAL": "general"
-        }
-    )
-
-    workflow.add_edge("analysis", END)
-    workflow.add_edge("rag", END)
-    workflow.add_edge("web", END)
-    workflow.add_edge("general", END)
-
-    copilot_graph = workflow.compile()
 
     left_margin, center_col, right_margin = st.columns([1, 8, 1])
 
@@ -378,28 +266,22 @@ if active_df is not None:
                 st.error("Error: GROQ_API_KEY is not set in environment variables.")
             else:
                 try:
-                    # Invoke LangGraph State Workflow
-                    initial_state = {
-                        "user_query": user_query,
-                        "route": "",
-                        "context_data": "",
-                        "dataframe": active_df
-                    }
-                    final_state = copilot_graph.invoke(initial_state)
-                    
-                    route_type = final_state["route"]
-                    context_data = final_state["context_data"]
+                    # Optional RAG retrieval if query is explicitly asking about reviews/feedback
+                    rag_context = ""
+                    if any(kw in user_query.lower() for kw in ["review", "feedback", "complaint", "rating", "customer", "product", "issue"]):
+                        if retriever:
+                            docs = retriever.invoke(user_query)
+                            rag_context = "\n\n".join([d.page_content for d in docs])
 
                     system_msg = SystemMessage(
                         content=(
                             "You are an expert AI Product Analyst and Conversational Assistant. "
                             "Strictly follow these rules:\n"
                             "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
-                            "2. Pay extreme attention to the conversation history list provided below. If the user refers to previous numbers, answers, or entities (e.g., 'smallest one', 'add 3'), retrieve them directly from the history instead of guessing or ignoring them.\n"
-                            "3. If Route Type is GENERAL or the query is math/logic/comparison, rely primarily on the conversation history and answer correctly without forcing irrelevant dataset context.\n"
-                            "4. If Route Type is RAG, provide a rich analytical textual explanation synthesizing customer reviews.\n"
-                            "5. If Route Type is ANALYSIS, present the exact tabular data requested.\n"
-                            "6. Keep answers short, crisp, and precise."
+                            "2. YOU HAVE COMPLETE CONVERSATIONAL MEMORY. Look at the entire chat history provided below. Remember user's name, previous numbers, logic, comparisons, and answers given across previous turns.\n"
+                            "3. If the user asks general questions, math, logic, or about themselves (like 'what is my name'), answer directly and accurately using the history.\n"
+                            "4. If relevant customer review context is provided, use it to give professional analytical insights.\n"
+                            "5. Keep answers short, crisp, and precise."
                         )
                     )
                     
@@ -410,8 +292,12 @@ if active_df is not None:
                         history_messages.append(HumanMessage(content=msg["user"]))
                         history_messages.append(AIMessage(content=msg["bot"]))
 
-                    # Current turn message
-                    human_msg = HumanMessage(content=f"Route Type: {route_type}\n\nContext Data:\n{context_data}\n\nUser Query:\n{user_query}")
+                    # Current turn message with optional context
+                    current_turn_content = f"User Query:\n{user_query}"
+                    if rag_context:
+                        current_turn_content += f"\n\nCustomer Reviews Context:\n{rag_context}"
+
+                    human_msg = HumanMessage(content=current_turn_content)
                     
                     # Complete strict list loop passed to LLM
                     prompt_messages = [system_msg] + history_messages + [human_msg]
@@ -443,7 +329,7 @@ if active_df is not None:
                             results = [r.get('body', '') for r in ddgs.text(f"market trends and best practices for {user_query}", max_results=3)]
                         web_context = "\n".join(results) if results else "Web search unavailable."
                     except Exception:
-                        web_context = "Web search network/DNS issue ki wajah se unavailable hai (fallback active)."
+                        web_context = "Web search network/DNS issue ki wajah से unavailable hai (fallback active)."
                     
                     combined_context = f"Internal Dataset Context:\n{rag_context}\n\nExternal Market Context:\n{web_context}"
                     
