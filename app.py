@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from typing import TypedDict
 
 from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_community.vectorstores import FAISS
@@ -403,8 +403,18 @@ if active_df is not None:
                         )
                     )
                     
+                    # Fetch past messages from SQLite for conversational memory
+                    past_messages = get_session_messages(current_id)
+                    history_messages = []
+                    for msg in past_messages:
+                        history_messages.append(HumanMessage(content=msg["user"]))
+                        history_messages.append(AIMessage(content=msg["bot"]))
+
                     human_msg = HumanMessage(content=f"Route Type: {route_type}\n\nContext:\n{context_data}\n\nQuery:\n{user_query}")
-                    prompt = ChatPromptTemplate.from_messages([system_msg, human_msg])
+                    
+                    # Construct prompt with history
+                    prompt_messages = [system_msg] + history_messages + [human_msg]
+                    prompt = ChatPromptTemplate.from_messages(prompt_messages)
                     chain = prompt | llm | StrOutputParser()
                     
                     st.markdown("### AI Analysis")
