@@ -259,7 +259,7 @@ if active_df is not None:
         1. 'ANALYSIS' ONLY if the query explicitly asks for tabular operations: counting rows, showing top N rows, shape, summary statistics, specific columns, filtering, or metrics.
         2. 'RAG' if the query asks for qualitative reasons, customer complaints, why customers are unhappy, feedback details, opinions, or sentiment from reviews.
         3. 'WEB' if the query asks for current affairs, real-time facts, market trends, or external industry knowledge.
-        4. 'GENERAL' if it's a casual greeting or general conversation.
+        4. 'GENERAL' if it's a casual greeting, general conversation, logic puzzle, math, or personal questions.
 
         User Query: {query}
         Output ONLY ONE WORD: ANALYSIS, RAG, WEB, or GENERAL.
@@ -323,7 +323,7 @@ if active_df is not None:
         query = state["user_query"]
         if any(keyword in query.lower() for keyword in ["data", "file", "overview", "what", "tell me"]):
             return {"context_data": files_overview_text}
-        return {"context_data": "General conversation or greeting."}
+        return {"context_data": "General conversation or logic/math processing."}
 
     # --- Build LangGraph Workflow ---
     workflow = StateGraph(CopilotState)
@@ -394,25 +394,27 @@ if active_df is not None:
 
                     system_msg = SystemMessage(
                         content=(
-                            "You are an expert AI Product Analyst and Customer Insights Copilot. "
+                            "You are an expert AI Product Analyst and Conversational Assistant. "
                             "Strictly follow these rules:\n"
                             "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
-                            "2. If Route Type is RAG, DO NOT output markdown tables or raw database dumps. Provide a rich, professional, analytical textual explanation synthesizing the customer reviews context.\n"
-                            "3. If Route Type is ANALYSIS, present the exact tabular data or statistics requested.\n"
-                            "4. Keep answers short, crisp, and data-driven."
+                            "2. If Route Type is GENERAL or the query is general logic/math, rely on the conversational history and answer directly without forcing irrelevant dataset context.\n"
+                            "3. If Route Type is RAG, provide a rich, professional, analytical textual explanation synthesizing the customer reviews context.\n"
+                            "4. If Route Type is ANALYSIS, present the exact tabular data or statistics requested.\n"
+                            "5. Keep answers short, crisp, and precise."
                         )
                     )
                     
-                    # Fetch past messages from SQLite for conversational memory
+                    # --- LOOP & LIST: Build conversation history list from SQLite database ---
                     past_messages = get_session_messages(current_id)
                     history_messages = []
                     for msg in past_messages:
                         history_messages.append(HumanMessage(content=msg["user"]))
                         history_messages.append(AIMessage(content=msg["bot"]))
 
-                    human_msg = HumanMessage(content=f"Route Type: {route_type}\n\nContext:\n{context_data}\n\nQuery:\n{user_query}")
+                    # Current turn message
+                    human_msg = HumanMessage(content=f"Route Type: {route_type}\n\nContext Data:\n{context_data}\n\nUser Query:\n{user_query}")
                     
-                    # Construct prompt with history
+                    # Construct complete prompt list loop
                     prompt_messages = [system_msg] + history_messages + [human_msg]
                     prompt = ChatPromptTemplate.from_messages(prompt_messages)
                     chain = prompt | llm | StrOutputParser()
@@ -420,6 +422,7 @@ if active_df is not None:
                     st.markdown("### AI Analysis")
                     response = st.write_stream(chain.stream({}))
                     
+                    # Save current exchange to SQLite database
                     cursor = chat_conn.cursor()
                     cursor.execute("INSERT INTO messages (session_id, user_msg, bot_msg) VALUES (?, ?, ?)", (current_id, user_query, response))
                     chat_conn.commit()
@@ -448,11 +451,18 @@ if active_df is not None:
                     sys_rec = SystemMessage(
                         content="You are an expert AI Product Analyst. Provide 2 to 3 short, punchy recommendations based on the provided context and user query."
                     )
+                    
+                    past_messages = get_session_messages(current_id)
+                    history_messages = []
+                    for msg in past_messages:
+                        history_messages.append(HumanMessage(content=msg["user"]))
+                        history_messages.append(AIMessage(content=msg["bot"]))
+
                     hum_rec = HumanMessage(
                         content=f"Context Data:\n{combined_context}\n\nUser Query:\n{user_query}"
                     )
                     
-                    rec_prompt = ChatPromptTemplate.from_messages([sys_rec, hum_rec])
+                    rec_prompt = ChatPromptTemplate.from_messages([sys_rec] + history_messages + [hum_rec])
                     chain = rec_prompt | llm | StrOutputParser()
                     
                     st.markdown("### AI Recommendations")
