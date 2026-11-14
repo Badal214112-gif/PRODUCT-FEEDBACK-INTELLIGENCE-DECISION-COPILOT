@@ -12,7 +12,7 @@ from duckduckgo_search import DDGS
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-from typing import TypedDict
+from typing import TypedDict, Any
 
 from database import load_data, init_sqlite_db, get_vector_store
 from memory import init_memory
@@ -138,6 +138,16 @@ else:
             else:
                 temp_df = pd.read_excel(f)
             temp_df.columns = [col.strip().replace(' ', '_').lower() for col in temp_df.columns]
+            # Ensure review_text mapping for custom files if exists
+            if 'review_text' not in temp_df.columns:
+                text_cols = [c for c in temp_df.columns if 'text' in c or 'comment' in c or 'review' in c or 'content' in c]
+                if text_cols:
+                    temp_df['review_text'] = temp_df[text_cols[0]].fillna("")
+                else:
+                    temp_df['review_text'] = temp_df.iloc[:, 0].astype(str).fillna("")
+            else:
+                temp_df['review_text'] = temp_df['review_text'].fillna("")
+                
             file_dfs[f.name] = temp_df
         df = pd.concat(list(file_dfs.values()), ignore_index=True, sort=False) if file_dfs else None
     else:
@@ -157,18 +167,24 @@ if df is not None:
     # --- LangGraph State & Checkpointer Setup ---
     class CopilotState(TypedDict):
         user_query: str
+        active_source: str
         tabular_context: str
         rag_context: str
         response: str
 
     def analysis_node(state: CopilotState):
         query = state["user_query"]
+        source_type = state["active_source"]
         tabular_context = ""
         
-        # Explicit check for general dataset overview queries
+        # Explicit check for general dataset overview queries based on active data source
         is_overview_query = any(kw in query.lower() for kw in ["tell me about data", "about the data", "dataset", "overview", "what is the data"])
         if is_overview_query and df is not None:
-            tabular_context = f"Dataset Overview:\n- Total Rows: {df.shape[0]}\n- Total Columns: {df.shape[1]}\n- Column Names: {list(df.columns)}"
+            if source_type == "Upload Custom Files" and file_dfs:
+                details = "".join([f"\n- File Name: {fname} | Rows: {fdf.shape[0]} | Columns: {list(fdf.columns)}" for fname, fdf in file_dfs.items()])
+                tabular_context = f"Custom Uploaded Datasets Overview:{details}\n- Total Combined Rows: {df.shape[0]}, Total Columns: {df.shape[1]}"
+            else:
+                tabular_context = f"Default Dataset Overview:\n- Total Rows: {df.shape[0]}\n- Total Columns: {df.shape[1]}\n- Column Names: {list(df.columns)}"
         else:
             is_tabular_query = any(kw in query.lower() for kw in ["row", "column", "shape", "count", "stat", "average", "rating", "distribution", "how many", "list columns", "summary"])
             if is_tabular_query and sqlite_conn:
@@ -214,7 +230,7 @@ if df is not None:
         st.title("AI Product Intelligence Copilot")
         
         with st.expander("View Dataset Preview", expanded=False):
-            if file_dfs:
+            if file_dfs and data_source_option == "Upload Custom Files":
                 selected_preview_file = st.selectbox("Select file to preview:", list(file_dfs.keys()))
                 st.dataframe(file_dfs[selected_preview_file].head(10), use_container_width=True)
             else:
@@ -233,7 +249,13 @@ if df is not None:
         if generate_clicked and user_query:
             try:
                 config = {"configurable": {"thread_id": str(current_id)}}
-                initial_state = {"user_query": user_query, "tabular_context": "", "rag_context": "", "response": ""}
+                initial_state = {
+                    "user_query": user_query, 
+                    "active_source": data_source_option,
+                    "tabular_context": "", 
+                    "rag_context": "", 
+                    "response": ""
+                }
                 final_state = copilot_graph.invoke(initial_state, config=config)
 
                 tabular_context = final_state.get("tabular_context", "")
@@ -245,7 +267,7 @@ if df is not None:
                         "Strictly follow these rules:\n"
                         "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
                         "2. YOU HAVE COMPLETE STATEFUL MEMORY. Look at the entire chat history provided below. Remember user's name, previous numbers, logic, and answers given across previous turns.\n"
-                        "3. If the user asks about the dataset overview, rows, columns, or shape, use the provided Dataset Overview data directly and do not give generic definitions.\n"
+                        "3. If the user asks about the dataset overview, rows, columns, or shape, use the provided Dataset Overview data directly (whether it's the Default Dataset or Uploaded Custom Files) and do not give generic definitions.\n"
                         "4. If the user asks about customer feedback, complaints, or sentiment, use the provided Customer Reviews Context.\n"
                         "5. Keep answers professional, precise, and structured."
                     )
