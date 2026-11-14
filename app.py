@@ -172,44 +172,45 @@ if df is not None:
         response: str
 
     def analysis_node(state: CopilotState):
-        query = state["user_query"]
+        query = state["user_query"].lower()
         source_type = state["active_source"]
         tabular_context = ""
         
-        # Explicit overview using pure dynamic df properties (No hardcoded fake data)
-        is_overview_query = any(kw in query.lower() for kw in ["tell me about data", "about the data", "dataset", "overview", "what is the data"])
+        # Check if user is asking about data overview / dataset info
+        is_overview_query = any(kw in query for kw in ["tell me about data", "about the data", "dataset", "overview", "what is the data", "default dataset"])
+        
         if is_overview_query and df is not None:
             if source_type == "Upload Custom Files" and file_dfs:
                 details = "".join([f"\n- File Name: {fname} | Shape (Rows, Cols): {fdf.shape} | Columns: {list(fdf.columns)}" for fname, fdf in file_dfs.items()])
-                tabular_context = f"Custom Uploaded Datasets Overview:{details}\n- Total Combined Shape (Rows, Cols): {df.shape}"
+                tabular_context = f"Currently Active Source: Uploaded Custom Files\nDetails:{details}\n- Total Combined Shape (Rows, Cols): {df.shape}"
             else:
-                tabular_context = f"Default Dataset Overview (Womens Clothing E-Commerce Reviews):\n- Shape (Rows, Cols): {df.shape}\n- Columns: {list(df.columns)}"
+                tabular_context = f"Currently Active Source: Default Dataset (Womens Clothing E-Commerce Reviews)\n- Shape (Rows, Cols): {df.shape}\n- Columns: {list(df.columns)}"
         else:
-            is_tabular_query = any(kw in query.lower() for kw in ["row", "column", "shape", "count", "stat", "average", "rating", "distribution", "how many", "list columns", "summary"])
+            is_tabular_query = any(kw in query for kw in ["row", "column", "shape", "count", "stat", "average", "rating", "distribution", "how many", "list columns", "summary"])
             if is_tabular_query and sqlite_conn:
                 try:
                     code_prompt = f"""
-                    You are a SQLite and Pandas data expert. The dataset is loaded in SQLite table named `reviews`.
+                    You are a SQLite and Pandas data expert. The active dataset is loaded in SQLite table named `reviews` (Source: {source_type}).
                     Columns available: {list(df.columns)}.
-                    Write a valid SQL query to answer this user request: "{query}"
+                    Write a valid SQL query to answer this user request: "{state['user_query']}"
                     Return ONLY the raw SQL query inside ```sql ... ``` block. No extra text.
                     """
                     sql_raw = llm.invoke(code_prompt).content
                     sql_clean = sql_raw.replace("```sql", "").replace("```", "").strip()
                     if sql_clean.lower().startswith("select"):
                         res_df = pd.read_sql_query(sql_clean, sqlite_conn)
-                        tabular_context = f"SQL Execution Query:\n{sql_clean}\n\nResult:\n{res_df.to_string(index=False)}"
+                        tabular_context = f"Active Source: {source_type}\nSQL Execution Query:\n{sql_clean}\n\nResult:\n{res_df.to_string(index=False)}"
                 except Exception:
-                    tabular_context = f"Dataset shape: {df.shape}, Columns: {list(df.columns)}"
+                    tabular_context = f"Active Source: {source_type}\nDataset shape: {df.shape}, Columns: {list(df.columns)}"
                     
         return {"tabular_context": tabular_context}
 
     def rag_node(state: CopilotState):
-        query = state["user_query"]
+        query = state["user_query"].lower()
         rag_context = ""
-        if any(kw in query.lower() for kw in ["review", "feedback", "complaint", "unhappy", "why", "issue", "sentiment", "reason"]):
+        if any(kw in query for kw in ["review", "feedback", "complaint", "unhappy", "why", "issue", "sentiment", "reason"]):
             if retriever:
-                docs = retriever.invoke(query)
+                docs = retriever.invoke(state["user_query"])
                 rag_context = "\n\n".join([d.page_content for d in docs])
         return {"rag_context": rag_context}
 
@@ -262,11 +263,12 @@ if df is not None:
 
                 system_msg = SystemMessage(
                     content=(
-                        "You are an expert AI Product Analyst and Conversational Analytics Copilot. "
+                        f"You are an expert AI Product Analyst and Conversational Analytics Copilot.\n"
+                        f"Current Active Data Source selected by user: {data_source_option}.\n"
                         "Strictly follow these rules:\n"
                         "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
                         "2. YOU HAVE COMPLETE STATEFUL MEMORY. Look at the entire chat history provided below. Remember user's name, previous numbers, logic, and answers given across previous turns.\n"
-                        "3. If the user asks about the dataset overview, rows, columns, or shape, use the provided Dataset Overview data directly (reporting exact row counts and column lists from the active dataframe) and do not invent or hallucinate fake attributes.\n"
+                        "3. If the user asks about dataset overview, rows, columns, or shape, use the provided Dataset Overview data corresponding strictly to the Active Data Source ({data_source_option}). Never mix up Default Dataset and Uploaded Custom Files.\n"
                         "4. If the user asks about customer feedback, complaints, or sentiment, use the provided Customer Reviews Context.\n"
                         "5. Keep answers professional, precise, and structured."
                     )
@@ -316,7 +318,7 @@ if df is not None:
                 combined_context = f"Internal Dataset Context:\n{rag_context}\n\nExternal Market Context:\n{web_context}"
                 
                 sys_rec = SystemMessage(
-                    content="You are an expert AI Product Analyst. Provide 2 to 3 short, punchy recommendations based on the provided context and user query."
+                    content=f"You are an expert AI Product Analyst. Provide 2 to 3 short, punchy recommendations based on the provided context, active data source ({data_source_option}), and user query."
                 )
                 
                 past_messages = get_session_messages(current_id)
