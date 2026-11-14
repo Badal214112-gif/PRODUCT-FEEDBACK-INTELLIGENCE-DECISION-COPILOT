@@ -54,5 +54,3 @@ def get_vector_store(data):
     except Exception as e:
         st.error(f"Vector store error: {e}")
         return None
-
-    
