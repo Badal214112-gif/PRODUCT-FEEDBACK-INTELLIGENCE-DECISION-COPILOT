@@ -138,7 +138,6 @@ else:
             else:
                 temp_df = pd.read_excel(f)
             temp_df.columns = [col.strip().replace(' ', '_').lower() for col in temp_df.columns]
-            # Ensure review_text mapping for custom files if exists
             if 'review_text' not in temp_df.columns:
                 text_cols = [c for c in temp_df.columns if 'text' in c or 'comment' in c or 'review' in c or 'content' in c]
                 if text_cols:
@@ -177,14 +176,14 @@ if df is not None:
         source_type = state["active_source"]
         tabular_context = ""
         
-        # Explicit check for general dataset overview queries based on active data source
+        # Explicit overview using pure dynamic df properties (No hardcoded fake data)
         is_overview_query = any(kw in query.lower() for kw in ["tell me about data", "about the data", "dataset", "overview", "what is the data"])
         if is_overview_query and df is not None:
             if source_type == "Upload Custom Files" and file_dfs:
-                details = "".join([f"\n- File Name: {fname} | Rows: {fdf.shape[0]} | Columns: {list(fdf.columns)}" for fname, fdf in file_dfs.items()])
-                tabular_context = f"Custom Uploaded Datasets Overview:{details}\n- Total Combined Rows: {df.shape[0]}, Total Columns: {df.shape[1]}"
+                details = "".join([f"\n- File Name: {fname} | Shape (Rows, Cols): {fdf.shape} | Columns: {list(fdf.columns)}" for fname, fdf in file_dfs.items()])
+                tabular_context = f"Custom Uploaded Datasets Overview:{details}\n- Total Combined Shape (Rows, Cols): {df.shape}"
             else:
-                tabular_context = f"Default Dataset Overview:\n- Total Rows: {df.shape[0]}\n- Total Columns: {df.shape[1]}\n- Column Names: {list(df.columns)}"
+                tabular_context = f"Default Dataset Overview (Womens Clothing E-Commerce Reviews):\n- Shape (Rows, Cols): {df.shape}\n- Columns: {list(df.columns)}"
         else:
             is_tabular_query = any(kw in query.lower() for kw in ["row", "column", "shape", "count", "stat", "average", "rating", "distribution", "how many", "list columns", "summary"])
             if is_tabular_query and sqlite_conn:
@@ -267,7 +266,7 @@ if df is not None:
                         "Strictly follow these rules:\n"
                         "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
                         "2. YOU HAVE COMPLETE STATEFUL MEMORY. Look at the entire chat history provided below. Remember user's name, previous numbers, logic, and answers given across previous turns.\n"
-                        "3. If the user asks about the dataset overview, rows, columns, or shape, use the provided Dataset Overview data directly (whether it's the Default Dataset or Uploaded Custom Files) and do not give generic definitions.\n"
+                        "3. If the user asks about the dataset overview, rows, columns, or shape, use the provided Dataset Overview data directly (reporting exact row counts and column lists from the active dataframe) and do not invent or hallucinate fake attributes.\n"
                         "4. If the user asks about customer feedback, complaints, or sentiment, use the provided Customer Reviews Context.\n"
                         "5. Keep answers professional, precise, and structured."
                     )
