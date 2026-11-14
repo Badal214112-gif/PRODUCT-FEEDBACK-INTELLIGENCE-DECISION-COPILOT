@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import pandas as pd
 import streamlit as st
@@ -163,22 +164,29 @@ if df is not None:
     def analysis_node(state: CopilotState):
         query = state["user_query"]
         tabular_context = ""
-        is_tabular_query = any(kw in query.lower() for kw in ["row", "column", "shape", "count", "stat", "average", "rating", "distribution", "how many", "list columns", "summary"])
-        if is_tabular_query and sqlite_conn:
-            try:
-                code_prompt = f"""
-                You are a SQLite and Pandas data expert. The dataset is loaded in SQLite table named `reviews`.
-                Columns available: {list(df.columns)}.
-                Write a valid SQL query to answer this user request: "{query}"
-                Return ONLY the raw SQL query inside ```sql ... ``` block. No extra text.
-                """
-                sql_raw = llm.invoke(code_prompt).content
-                sql_clean = sql_raw.replace("```sql", "").replace("```", "").strip()
-                if sql_clean.lower().startswith("select"):
-                    res_df = pd.read_sql_query(sql_clean, sqlite_conn)
-                    tabular_context = f"SQL Execution Query:\n{sql_clean}\n\nResult:\n{res_df.to_string(index=False)}"
-            except Exception:
-                tabular_context = f"Dataset shape: {df.shape}, Columns: {list(df.columns)}"
+        
+        # Explicit check for general dataset overview queries
+        is_overview_query = any(kw in query.lower() for kw in ["tell me about data", "about the data", "dataset", "overview", "what is the data"])
+        if is_overview_query and df is not None:
+            tabular_context = f"Dataset Overview:\n- Total Rows: {df.shape[0]}\n- Total Columns: {df.shape[1]}\n- Column Names: {list(df.columns)}"
+        else:
+            is_tabular_query = any(kw in query.lower() for kw in ["row", "column", "shape", "count", "stat", "average", "rating", "distribution", "how many", "list columns", "summary"])
+            if is_tabular_query and sqlite_conn:
+                try:
+                    code_prompt = f"""
+                    You are a SQLite and Pandas data expert. The dataset is loaded in SQLite table named `reviews`.
+                    Columns available: {list(df.columns)}.
+                    Write a valid SQL query to answer this user request: "{query}"
+                    Return ONLY the raw SQL query inside ```sql ... ``` block. No extra text.
+                    """
+                    sql_raw = llm.invoke(code_prompt).content
+                    sql_clean = sql_raw.replace("```sql", "").replace("```", "").strip()
+                    if sql_clean.lower().startswith("select"):
+                        res_df = pd.read_sql_query(sql_clean, sqlite_conn)
+                        tabular_context = f"SQL Execution Query:\n{sql_clean}\n\nResult:\n{res_df.to_string(index=False)}"
+                except Exception:
+                    tabular_context = f"Dataset shape: {df.shape}, Columns: {list(df.columns)}"
+                    
         return {"tabular_context": tabular_context}
 
     def rag_node(state: CopilotState):
@@ -224,7 +232,6 @@ if df is not None:
 
         if generate_clicked and user_query:
             try:
-                # Invoke LangGraph Workflow with Checkpointer Thread ID
                 config = {"configurable": {"thread_id": str(current_id)}}
                 initial_state = {"user_query": user_query, "tabular_context": "", "rag_context": "", "response": ""}
                 final_state = copilot_graph.invoke(initial_state, config=config)
@@ -238,13 +245,12 @@ if df is not None:
                         "Strictly follow these rules:\n"
                         "1. Match the language of the user's query: if English, reply in English. If Hinglish/Hindi, reply in Hinglish.\n"
                         "2. YOU HAVE COMPLETE STATEFUL MEMORY. Look at the entire chat history provided below. Remember user's name, previous numbers, logic, and answers given across previous turns.\n"
-                        "3. If the user asks about dataset shape, rows, columns, or statistics, use the provided SQL/Tabular execution data accurately.\n"
+                        "3. If the user asks about the dataset overview, rows, columns, or shape, use the provided Dataset Overview data directly and do not give generic definitions.\n"
                         "4. If the user asks about customer feedback, complaints, or sentiment, use the provided Customer Reviews Context.\n"
                         "5. Keep answers professional, precise, and structured."
                     )
                 )
                 
-                # --- SESSION-SPECIFIC HISTORY LIST LOOP ---
                 past_messages = get_session_messages(current_id)
                 history_messages = []
                 for msg in past_messages:
@@ -266,7 +272,6 @@ if df is not None:
                 st.markdown("### AI Analysis")
                 response = st.write_stream(chain.stream({}))
                 
-                # Save current exchange to active session SQLite database
                 cursor = chat_conn.cursor()
                 cursor.execute("INSERT INTO messages (session_id, user_msg, bot_msg) VALUES (?, ?, ?)", (current_id, user_query, response))
                 chat_conn.commit()
